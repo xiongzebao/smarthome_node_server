@@ -1,0 +1,213 @@
+#!/usr/bin/env node
+
+/**
+ * Module dependencies.
+ */
+
+var app = require('./app');
+var debug = require('debug')('booksysmanager:server');
+var http = require('http');
+var https = require('https');
+var fs = require("fs");
+var path = require("path");
+const rootPath = path.dirname(require.main.filename);;
+let dayjs = require("dayjs");
+let db = require(rootPath + "/db/dbUtils.js")
+
+var options = {
+  key: fs.readFileSync("./cert/1531060622054.key"),
+  cert: fs.readFileSync("./cert/1531060622054.pem")
+};
+
+var port = normalizePort(process.env.PORT || '4000');//本地4000 
+//app.set('port', port);
+
+
+
+// var HttpsServer = https.createServer(app).listen(4300);
+// HttpsServer.on('error', onError);
+// HttpsServer.on('listening',onHttpsListening);
+
+/**
+ * Listen on provided port, on all network interfaces.
+ */
+var server = http.createServer(app);
+server.listen(port);
+server.on('error', onError);
+server.on('listening', onListening);
+
+
+/**
+ * Normalize a port into a number, string, or false.
+ */
+
+function normalizePort(val) {
+  var port = parseInt(val, 10);
+
+  if (isNaN(port)) {
+    // named pipe
+    return val;
+  }
+
+  if (port >= 0) {
+    // port number
+    return port;
+  }
+
+  return false;
+}
+
+/**
+ * Event listener for HTTP server "error" event.
+ */
+
+function onError(error) {
+  if (error.syscall !== 'listen') {
+    throw error;
+  }
+
+  var bind = typeof port === 'string'
+    ? 'Pipe ' + port
+    : 'Port ' + port;
+
+  // handle specific listen errors with friendly messages
+  switch (error.code) {
+    case 'EACCES':
+      console.error(bind + ' requires elevated privileges');
+      process.exit(1);
+      break;
+    case 'EADDRINUSE':
+      console.error(bind + ' is already in use');
+      process.exit(1);
+      break;
+    default:
+      throw error;
+  }
+}
+
+/**
+ * Event listener for HTTP server "listening" event.
+ */
+
+function onListening() {
+  var addr = server.address();
+  var bind = typeof addr === 'string'
+    ? 'pipe ' + addr
+    : 'port ' + addr.port;
+  console.log('Listening on ' + bind);
+}
+
+function onHttpsListening() {
+  var addr = HttpsServer.address();
+  var bind = typeof addr === 'string'
+    ? 'pipe ' + addr
+    : 'port ' + addr.port;
+  console.log('onHttpsListening on ' + bind);
+}
+
+
+
+
+const io = require('socket.io')(server, {
+  //   path: '/test',
+  serveClient: false,
+  cors: true,
+  transports: ['polling', 'websocket'],
+  pingInterval: 25000,
+  pingTimeout: 5000,
+  cookie: false
+});
+
+
+io.use((socket, next) => {
+
+
+  next();
+});
+
+
+io.on('connect', (socket) => {
+
+  let handshake = socket.handshake;
+  let deviceinfo = handshake.headers.device;
+
+  let type = deviceinfo.split(',')[0];
+  console.log(type)
+  socket.join(type)
+  if (typeof deviceinfo == 'undefined') {
+    return;
+  }
+  console.log(deviceinfo + 'connected!');
+
+  let currentTime = dayjs().format("YYYY-MM-DD HH:mm:ss");
+  let data = {};
+  data.date = currentTime;
+  data.device_info = deviceinfo;
+  data.stat = 1;
+  db.insert("connect_info", data);
+
+  io.emit('server message', deviceinfo + "    connected!");
+
+
+  // io server disconnect	The socket was forcefully disconnected with socket.disconnect()
+  // io client disconnect	The client has manually disconnected the socket using socket.disconnect()
+  // ping timeout	The client did not respond in the pingTimeout range
+  // transport close	The connection was closed (example: the user has lost connection, or the network was changed from WiFi to 4G)
+  // transport error	The connection has encountered an error
+
+
+  socket.on('disconnect', (reason) => {
+    let handshake = socket.handshake;
+    let deviceinfo = handshake.headers.device;
+
+    if (typeof deviceinfo == 'undefined') {
+      return;
+    }
+    console.log(handshake.headers.device + '  disconnect');
+    let currentTime = dayjs().format("YYYY-MM-DD HH:mm:ss");
+    let data = {};
+    data.date = currentTime;
+
+    data.device_info = deviceinfo;
+    data.stat = 0;
+    data.reason = reason;
+    db.insert("connect_info", data);
+  });
+
+  socket.on('client message', (data) => {
+    console.log(data);
+  })
+
+  socket.on('dht', (data) => {
+    console.log(data);
+    let currentTime = dayjs().format("YYYY-MM-DD HH:mm:ss");
+    data.date = currentTime;
+    db.insert("dht", data);
+  })
+
+  socket.on('warn', (data) => {
+    console.log(data);
+    let currentTime = dayjs().format("YYYY-MM-DD HH:mm:ss");
+    data.date = currentTime;
+    db.insert("warn_info", data);
+    io.room("android").emit('warn', data);
+  })
+
+  socket.on('action', (data) => {
+    console.log(data);
+    let currentTime = dayjs().format("YYYY-MM-DD HH:mm:ss");
+    data.date = currentTime;
+    db.insert("action_event", data);
+  })
+
+
+  socket.on('ping', (data) => {
+    socket.emit("ping",'p')
+  })
+
+  socket.on("private message", (anotherSocketId, msg) => {
+    socket.to(anotherSocketId).emit("private message", socket.id, msg);
+  });
+
+
+})
